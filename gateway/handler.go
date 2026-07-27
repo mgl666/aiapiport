@@ -10,6 +10,7 @@ import (
 
 	"aiapiport/config"
 	"aiapiport/provider"
+	"aiapiport/router"
 )
 
 // handleChat handles POST /v1/chat/completions.
