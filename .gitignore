@@ -1,0 +1,19 @@
+# compiled binaries
+/aiapiport-bin
+/aiapiport-bin.exe
+/dist/
+/build/
+*.egg-info/
+
+# local config with real keys — never commit this
+/config.yaml
+
+# Python package artifacts
+/aiapiport/aiapiport-bin
+/aiapiport/aiapiport-bin.exe
+/aiapiport/aiapiport-bin-linux-amd64
+/aiapiport/aiapiport-bin-linux-arm64
+
+.env
+.claude
+.DS_Store

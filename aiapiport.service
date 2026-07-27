@@ -1,0 +1,13 @@
+[Unit]
+Description=aiapiport (lightweight LLM gateway)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/aiapiport-bin serve --config /etc/aiapiport/config.yaml
+Restart=on-failure
+RestartSec=3
+# 内存软限,防偶发尖峰拖垮 1G VPS
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

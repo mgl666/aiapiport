@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          targets="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
+          for target in $targets; do
+            OS="${target%/*}"
+            ARCH="${target#*/}"
+            OUT="dist/aiapiport-${OS}-${ARCH}"
+            [ "$OS" = "windows" ] && OUT="${OUT}.exe"
+            GOOS=$OS GOARCH=$ARCH CGO_ENABLED=0 \
+              go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" \
+              -trimpath -o "$OUT" .
+            echo "Built $OUT"
+          done
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

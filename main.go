@@ -1,0 +1,150 @@
+package main
+
+import (
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
+	"aiapiport/config"
+	"aiapiport/gateway"
+	"aiapiport/provider"
+)
+
+const version = "0.1.0"
+
+func usage() {
+	fmt.Fprintf(os.Stderr, `aiapiport - lightweight LLM gateway v%s
+
+Usage:
+  aiapiport start   [-config FILE] [-port PORT]  # start in background
+  aiapiport stop                                  # stop background process
+  aiapiport status                                # check status
+  aiapiport logs    [-n N] [-f]                   # view/follow logs
+  aiapiport serve   [-config FILE] [-port PORT]   # run in foreground (no daemonize)
+
+Flags:
+  -config FILE   config file path (default config.yaml)
+  -port   PORT   override listen port from config.yaml
+  -n      N      show last N log lines (default 50)
+  -f             follow log (tail -f)
+
+`, version)
+	os.Exit(1)
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+	}
+	sub := os.Args[1]
+	args := os.Args[2:]
+
+	switch sub {
+	case "start":
+		cmdStart(args)
+	case "stop":
+		cmdStop()
+	case "status":
+		cmdStatus()
+	case "logs":
+		cmdLogs(args)
+	case "serve":
+		cmdServe(args)
+	case "version", "-v", "--version":
+		fmt.Println("aiapiport", version)
+	default:
+		usage()
+	}
+}
+
+// ---- logs ----
+
+func cmdLogs(args []string) {
+	fs := newFlagSet("logs")
+	n := fs.Int("n", 50, "last N lines")
+	follow := fs.Bool("f", false, "follow")
+	_ = fs.Parse(args)
+
+	lf := logFile()
+	if _, err := os.Stat(lf); err != nil {
+		fmt.Println("no log file yet")
+		return
+	}
+	tailArgs := []string{"-n", strconv.Itoa(*n)}
+	if *follow {
+		tailArgs = append(tailArgs, "-f")
+	}
+	tailArgs = append(tailArgs, lf)
+	cmd := exec.Command("tail", tailArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
+}
+
+// ---- serve (foreground) ----
+
+func cmdServe(args []string) {
+	fs := newFlagSet("serve")
+	cfgPath := fs.String("config", "config.yaml", "config file")
+	port := fs.String("port", "", "override listen port")
+	_ = fs.Parse(args)
+
+	// When running as a daemon (stdout is not a terminal), wrap stderr with a
+	// rotating writer so the log file never exceeds 20 MB.
+	logOut := os.Stderr
+	var rw *rotatingWriter
+	if fi, err := os.Stderr.Stat(); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
+		if rw, err = newRotatingWriter(logFile()); err == nil {
+			logOut = os.NewFile(0, "") // placeholder — slog uses the writer directly
+			_ = logOut
+			slog.SetDefault(slog.New(slog.NewTextHandler(rw, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		}
+	}
+	if rw == nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	}
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fatal("load config: %v", err)
+	}
+	if *port != "" {
+		cfg.Server.Listen = ":" + strings.TrimPrefix(*port, ":")
+	}
+
+	regs := provider.NewRegistry()
+	srv := gateway.New(cfg, regs)
+
+	httpServer := &http.Server{
+		Addr:    cfg.Server.Listen,
+		Handler: srv.Handler(),
+	}
+
+	slog.Info("listening", "addr", cfg.Server.Listen)
+	if err := httpServer.ListenAndServe(); err != nil {
+		fatal("server: %v", err)
+	}
+}
+
+// ---- helpers ----
+
+func logsContain(substr string) bool {
+	data, err := os.ReadFile(logFile())
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), substr)
+}
+
+func fatal(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
+	os.Exit(1)
+}
+
+// keep compiler happy — time and exec are used by platform files via same package
+var _ = time.Sleep
