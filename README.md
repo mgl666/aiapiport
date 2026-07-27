@@ -93,6 +93,9 @@ aiapiport serve -config config.yaml          # foreground (for systemd/Docker)
 ```
 
 Logs and PID file default to `~/.aiapiport/`. Override with `AIAPIPORT_RUN_DIR`.
+Logs are truncated at 20 MB; no backup is kept. The gateway checks `config.yaml`
+once per second: valid changes to routes, providers, keys, and `auth_key` apply
+to new requests automatically. Changes to `server.listen` still require a restart.
 
 ### Example request
 
@@ -254,6 +257,9 @@ aiapiport serve -config config.yaml          # 前台运行（适合 systemd/Doc
 ```
 
 日志和 PID 文件默认在 `~/.aiapiport/`，可用 `AIAPIPORT_RUN_DIR` 覆盖。
+日志到 20 MB 时会截断，不保留备份。网关每秒检查一次 `config.yaml`：
+路由、provider、key 和 `auth_key` 的有效修改会自动应用到新请求；修改
+`server.listen` 仍需重启。
 
 ### 调用示例
 

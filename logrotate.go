@@ -7,8 +7,8 @@ import (
 
 const maxLogSize = 20 * 1024 * 1024 // 20 MB
 
-// rotatingWriter is an io.Writer that rotates the log file when it exceeds maxLogSize.
-// On rotation: current file → .log.1 (overwriting any previous backup), then a fresh file is opened.
+// rotatingWriter is an io.Writer that truncates the log file when it exceeds maxLogSize.
+// No backup copy is retained.
 type rotatingWriter struct {
 	mu   sync.Mutex
 	path string
@@ -35,7 +35,6 @@ func (w *rotatingWriter) Write(p []byte) (int, error) {
 
 	if w.size+int64(len(p)) > maxLogSize {
 		_ = w.file.Close()
-		_ = os.Rename(w.path, w.path+".1")
 		f, err := os.OpenFile(w.path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
 			return 0, err

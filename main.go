@@ -15,7 +15,7 @@ import (
 	"aiapiport/provider"
 )
 
-const version = "0.1.0"
+const version = "0.1.1"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `aiapiport - lightweight LLM gateway v%s
@@ -119,6 +119,7 @@ func cmdServe(args []string) {
 
 	regs := provider.NewRegistry()
 	srv := gateway.New(cfg, regs)
+	go watchConfig(*cfgPath, srv)
 
 	httpServer := &http.Server{
 		Addr:    cfg.Server.Listen,
@@ -128,6 +129,37 @@ func cmdServe(args []string) {
 	slog.Info("listening", "addr", cfg.Server.Listen)
 	if err := httpServer.ListenAndServe(); err != nil {
 		fatal("server: %v", err)
+	}
+}
+
+// watchConfig polls the config file so deployments can update routes and keys
+// without restarting the gateway. A failed reload always leaves the last valid
+// configuration active.
+func watchConfig(path string, srv *gateway.Server) {
+	const interval = time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var lastMod time.Time
+	var lastSize int64 = -1
+	for range ticker.C {
+		info, err := os.Stat(path)
+		if err != nil {
+			slog.Warn("config reload check failed", "path", path, "err", err)
+			continue
+		}
+		if info.ModTime().Equal(lastMod) && info.Size() == lastSize {
+			continue
+		}
+		lastMod, lastSize = info.ModTime(), info.Size()
+
+		cfg, err := config.Load(path)
+		if err != nil {
+			slog.Error("config reload rejected; keeping last valid configuration", "path", path, "err", err)
+			continue
+		}
+		listenChanged := srv.Reload(cfg)
+		slog.Info("config reloaded", "path", path, "providers", len(cfg.Providers), "routes", len(cfg.Routes), "listen_change_ignored", listenChanged)
 	}
 }
 

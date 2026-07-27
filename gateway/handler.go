@@ -41,49 +41,54 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pnames, err := s.router.ProviderNames(model)
+	cfg, rt := s.snapshot()
+	pnames, err := rt.ProviderNames(model)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
 	if isStream {
-		s.handleStream(r.Context(), w, body, model, pnames)
+		s.handleStream(r.Context(), w, body, model, pnames, cfg, rt)
 		return
 	}
-	s.handleNonStream(r.Context(), w, body, model, pnames)
+	s.handleNonStream(r.Context(), w, body, model, pnames, cfg, rt)
 }
 
 // ---- non-streaming ----
 
-func (s *Server) handleNonStream(ctx context.Context, w http.ResponseWriter, body []byte, model string, pnames []string) {
+func (s *Server) handleNonStream(ctx context.Context, w http.ResponseWriter, body []byte, model string, pnames []string, cfg *config.Config, rt *router.Router) {
 	var lastErr error
+	slog.Info("route selected", "model", model, "stream", false, "providers", pnames)
 	for pi, pname := range pnames {
-		p, _ := s.cfg.FindProvider(pname)
+		p, _ := cfg.FindProvider(pname)
 		keys := p.Keys
 		for ki := range keys {
-			res, err := s.router.Attempt(ctx, model, body, false, pi, ki)
+			slog.Info("upstream attempt", "model", model, "stream", false, "route_index", pi, "provider", pname, "base_url", p.BaseURL, "key_index", ki, "key_count", len(keys))
+			res, err := rt.Attempt(ctx, model, body, false, pi, ki)
 			if err != nil {
 				writeError(w, http.StatusBadGateway, err.Error())
 				return
 			}
 			if res.Err != nil {
 				lastErr = res.Err
-				slog.Warn("upstream error, trying next key", "provider", pname, "key_index", ki, "err", res.Err)
+				slog.Warn("upstream error, trying next key", "model", model, "provider", pname, "base_url", p.BaseURL, "route_index", pi, "key_index", ki, "err", res.Err)
 				continue
 			}
 			resp := res.Resp
 			if res.Retryable {
-				slog.Warn("upstream retryable status, trying next key", "provider", pname, "key_index", ki, "status", resp.StatusCode)
+				slog.Warn("upstream retryable status, trying next key", "model", model, "provider", pname, "base_url", p.BaseURL, "route_index", pi, "key_index", ki, "status", resp.StatusCode)
 				errBody := drainBody(resp)
 				_ = resp.Body.Close()
 				lastErr = fmt.Errorf("upstream %s key#%d returned status %d: %s", pname, ki, resp.StatusCode, errBody)
 				continue
 			}
+			slog.Info("upstream response", "model", model, "stream", false, "provider", pname, "base_url", p.BaseURL, "route_index", pi, "key_index", ki, "status", resp.StatusCode)
 			s.deliverNonStream(ctx, w, resp, p, model)
 			return
 		}
 	}
+	slog.Error("all upstreams exhausted", "model", model, "stream", false, "providers", pnames, "err", lastErr)
 	msg := "all providers and keys exhausted"
 	if lastErr != nil {
 		msg = lastErr.Error()
@@ -123,34 +128,38 @@ func (s *Server) deliverNonStream(ctx context.Context, w http.ResponseWriter, re
 
 // ---- streaming ----
 
-func (s *Server) handleStream(ctx context.Context, w http.ResponseWriter, body []byte, model string, pnames []string) {
+func (s *Server) handleStream(ctx context.Context, w http.ResponseWriter, body []byte, model string, pnames []string, cfg *config.Config, rt *router.Router) {
 	var lastErr error
+	slog.Info("route selected", "model", model, "stream", true, "providers", pnames)
 	for pi, pname := range pnames {
-		p, _ := s.cfg.FindProvider(pname)
+		p, _ := cfg.FindProvider(pname)
 		keys := p.Keys
 		for ki := range keys {
-			res, err := s.router.Attempt(ctx, model, body, true, pi, ki)
+			slog.Info("upstream attempt", "model", model, "stream", true, "route_index", pi, "provider", pname, "base_url", p.BaseURL, "key_index", ki, "key_count", len(keys))
+			res, err := rt.Attempt(ctx, model, body, true, pi, ki)
 			if err != nil {
 				writeError(w, http.StatusBadGateway, err.Error())
 				return
 			}
 			if res.Err != nil {
 				lastErr = res.Err
-				slog.Warn("upstream stream error, trying next key", "provider", pname, "key_index", ki, "err", res.Err)
+				slog.Warn("upstream stream error, trying next key", "model", model, "provider", pname, "base_url", p.BaseURL, "route_index", pi, "key_index", ki, "err", res.Err)
 				continue
 			}
 			resp := res.Resp
 			if res.Retryable {
-				slog.Warn("upstream stream retryable status before flush, trying next key", "provider", pname, "key_index", ki, "status", resp.StatusCode)
+				slog.Warn("upstream stream retryable status before flush, trying next key", "model", model, "provider", pname, "base_url", p.BaseURL, "route_index", pi, "key_index", ki, "status", resp.StatusCode)
 				_, _ = io.Copy(io.Discard, resp.Body)
 				_ = resp.Body.Close()
 				lastErr = fmt.Errorf("upstream %s key#%d stream status %d", pname, ki, resp.StatusCode)
 				continue
 			}
+			slog.Info("upstream response", "model", model, "stream", true, "provider", pname, "base_url", p.BaseURL, "route_index", pi, "key_index", ki, "status", resp.StatusCode)
 			s.deliverStream(ctx, w, resp, p, model)
 			return
 		}
 	}
+	slog.Error("all upstreams exhausted", "model", model, "stream", true, "providers", pnames, "err", lastErr)
 	msg := "all providers and keys exhausted"
 	if lastErr != nil {
 		msg = lastErr.Error()
