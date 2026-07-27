@@ -8,11 +8,8 @@
 # local config with real keys — never commit this
 /config.yaml
 
-# Python package artifacts
-/aiapiport/aiapiport-bin
-/aiapiport/aiapiport-bin.exe
-/aiapiport/aiapiport-bin-linux-amd64
-/aiapiport/aiapiport-bin-linux-arm64
+# Python package artifacts (no longer used, project is Go-only)
+/aiapiport/
 
 .env
 .claude
