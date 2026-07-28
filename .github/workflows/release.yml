@@ -34,8 +34,19 @@ jobs:
             echo "Built $OUT"
           done
 
+      - name: Extract release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[v" ver "\\]" { found=1; next }
+            found && $0 ~ "^## \\[v" { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          echo "=== Release notes for $VERSION ==="
+          cat release_notes.md
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: release_notes.md
