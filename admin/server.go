@@ -7,11 +7,14 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/config", s.auth(s.apiGetConfig))
 	mux.HandleFunc("PUT /api/config", s.auth(s.apiPutConfig))
 	mux.HandleFunc("POST /api/test", s.auth(s.apiTest))
+	mux.HandleFunc("POST /api/models", s.auth(s.apiListModels))
 	return mux
 }
 
@@ -165,6 +169,84 @@ func (s *Server) apiTest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	writeJSON(w, http.StatusOK, s.gw.TestChat(ctx, req.Model, req.Provider))
+}
+
+// apiListModels fetches the model list from a provider's own API so the panel
+// can offer real model names. openai: GET {base_url}/models with Bearer key;
+// anthropic: GET {base_url}/v1/models with x-api-key. Body: {"provider": "..."}.
+func (s *Server) apiListModels(w http.ResponseWriter, r *http.Request) {
+	s.refresh()
+	var req struct {
+		Provider string `json:"provider"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid body: " + err.Error()})
+		return
+	}
+	p, ok := s.current().FindProvider(req.Provider)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("provider %q not found", req.Provider)})
+		return
+	}
+	if len(p.Keys) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "provider has no keys"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	base := strings.TrimSuffix(p.BaseURL, "/")
+	var httpReq *http.Request
+	switch p.Type {
+	case "anthropic":
+		httpReq, _ = http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
+		httpReq.Header.Set("x-api-key", p.Keys[0])
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
+	default:
+		httpReq, _ = http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
+		httpReq.Header.Set("Authorization", "Bearer "+p.Keys[0])
+	}
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": fmt.Sprintf("upstream HTTP %d: %s", resp.StatusCode, truncateStr(string(body), 300))})
+		return
+	}
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "parse models: " + err.Error()})
+		return
+	}
+	seen := make(map[string]bool, len(parsed.Data))
+	var ids []string
+	for _, m := range parsed.Data {
+		id := strings.TrimSpace(m.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": p.Name, "models": ids})
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

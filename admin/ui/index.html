@@ -107,7 +107,21 @@
   }
   .chip button { background: none; border: none; color: var(--muted); font-size: 14px; padding: 0 2px; }
   .chip button:hover { color: var(--err); }
+  .chip button:disabled { opacity: .3; cursor: default; }
+  .chip button:hover:disabled { color: var(--muted); }
+  .chip .mv { color: #9db4d8; }
+  .chip .mv:hover { color: var(--accent); }
   .chip.primary { border-color: var(--accent); color: #bcd4ff; }
+
+  .toolbar { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
+  .keys-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .masked {
+    background: var(--panel2); border: 1px dashed var(--border); border-radius: 6px;
+    padding: 8px 10px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px; white-space: pre-line; min-height: 38px; word-break: break-all;
+  }
+  .models-row { margin-top: 8px; }
+  .models-row select { width: 100%; }
 
   .empty { color: var(--muted); text-align: center; padding: 30px 0; }
   .hint { color: var(--muted); font-size: 12px; }
@@ -216,6 +230,8 @@ let state = { server: { listen: '', auth_key: '' }, admin: null, providers: [], 
 let rawText = '';
 let dirty = false;
 let cfgPath = '';
+let keysVisible = {};  // provider name -> true when raw key text is shown
+let modelsCache = {};  // provider name -> [model ids] fetched from upstream
 
 const $ = (id) => document.getElementById(id);
 
@@ -349,7 +365,13 @@ function renderProviders() {
   if (!state.providers.length) {
     box.innerHTML = '<div class="empty">还没有服务商，点下方按钮添加</div>';
   } else {
-    box.innerHTML = state.providers.map((p, i) => `
+    box.innerHTML = state.providers.map((p, i) => {
+      const vis = !!keysVisible[p.name];
+      const keys = p.keys || [];
+      const keysHtml = vis
+        ? `<textarea rows="${Math.max(1, keys.length)}" data-f="keys" data-i="${i}" spellcheck="false">${esc(keys.join('\n'))}</textarea>`
+        : `<div class="masked" title="点击 👁 显示明文">${keys.length ? keys.map(maskKey).join('\n') : '（暂无 key）'}</div>`;
+      return `
       <div class="card">
         <div class="card-head">
           <input type="text" value="${esc(p.name)}" placeholder="服务商名称" data-f="name" data-i="${i}">
@@ -365,21 +387,37 @@ function renderProviders() {
             </select>
           </label>
         </div>
-        <label>Keys（每行一个，第一行优先）
-          <textarea rows="${Math.max(1, (p.keys || []).length)}" data-f="keys" data-i="${i}" spellcheck="false">${esc((p.keys || []).join('\n'))}</textarea>
-        </label>
+        <div class="keys-head">
+          <span class="hint">Keys（每行一个，第一行优先）</span>
+          <button class="btn small" data-eyes="${i}" title="${vis ? '隐藏明文' : '显示明文'}">${vis ? '🙈 隐藏' : '👁 显示'}</button>
+        </div>
+        ${keysHtml}
         <div class="test-row">
-          <input type="text" list="model-list" placeholder="测试用的模型名（走完整路由）" data-test-model="${i}">
+          <input type="text" list="model-list" placeholder="测试模型名（可点“获取模型”从上游拉取）" data-test-model="${i}">
+          <button class="btn small" data-models="${i}" title="从该服务商 API 获取可用模型列表">获取模型</button>
           <button class="btn small" data-test="${i}">测试</button>
           <span class="test-result" data-result="${i}"></span>
         </div>
-      </div>`).join('');
+        <div class="models-row" data-modelswrap="${i}"></div>
+      </div>`;
+    }).join('');
   }
-  box.insertAdjacentHTML('beforeend', '<button class="btn primary" id="addProviderBtn">+ 添加服务商</button>');
+  const allVisible = state.providers.length > 0 && state.providers.every((p) => keysVisible[p.name]);
+  box.insertAdjacentHTML('beforeend', `
+    <div class="toolbar">
+      <button class="btn" id="toggleKeysBtn">${allVisible ? '🙈 全部隐藏密钥' : '👁 全部显示密钥'}</button>
+      <span class="spacer"></span>
+      <button class="btn primary" id="addProviderBtn">+ 添加服务商</button>
+    </div>`);
 
   $('addProviderBtn').onclick = () => {
     state.providers.push({ name: '', base_url: '', type: 'openai', keys: [''] });
     setDirty(true);
+    renderProviders();
+  };
+  $('toggleKeysBtn').onclick = () => {
+    const show = !allVisible;
+    state.providers.forEach((p) => { keysVisible[p.name] = show; });
     renderProviders();
   };
 
@@ -407,9 +445,21 @@ function renderProviders() {
       }
       if (!confirm('删除服务商「' + (name || '(未命名)') + '」？')) return;
       state.providers.splice(i, 1);
+      delete keysVisible[name];
+      delete modelsCache[name];
       setDirty(true);
       renderProviders();
     };
+  });
+  box.querySelectorAll('[data-eyes]').forEach((b) => {
+    b.onclick = () => {
+      const i = +b.dataset.eyes, name = state.providers[i].name;
+      keysVisible[name] = !keysVisible[name];
+      renderProviders();
+    };
+  });
+  box.querySelectorAll('[data-models]').forEach((b) => {
+    b.onclick = () => fetchModels(+b.dataset.models);
   });
   box.querySelectorAll('[data-test]').forEach((b) => {
     b.onclick = () => {
@@ -422,6 +472,46 @@ function renderProviders() {
   });
 }
 
+function maskKey(k) {
+  if (!k) return '';
+  if (k.length <= 12) return '••••••••';
+  return k.slice(0, 6) + '••••••••' + k.slice(-4);
+}
+
+async function fetchModels(i) {
+  const p = state.providers[i];
+  const wrap = document.querySelector(`[data-modelswrap="${i}"]`);
+  const btn = document.querySelector(`[data-models="${i}"]`);
+  if (!p.name) { toast('请先填写服务商名称', 'err'); return; }
+  btn.disabled = true;
+  btn.textContent = '获取中…';
+  wrap.innerHTML = '<span class="hint">获取中…</span>';
+  try {
+    const r = await api('/api/models', { method: 'POST', body: JSON.stringify({ provider: p.name }) });
+    if (r.ok) {
+      const models = r.models || [];
+      modelsCache[p.name] = models;
+      wrap.innerHTML = models.length
+        ? `<select data-modelpick="${i}"><option value="">上游可用模型（${models.length} 个），选择后填入测试框</option>${models.map((m) => `<option>${esc(m)}</option>`).join('')}</select>`
+        : '<span class="hint">上游返回了空模型列表</span>';
+      const sel = wrap.querySelector('select');
+      if (sel) sel.onchange = () => {
+        if (sel.value) {
+          const input = document.querySelector(`[data-test-model="${i}"]`);
+          if (input) { input.value = sel.value; input.focus(); }
+        }
+      };
+    } else {
+      wrap.innerHTML = `<span class="test-result err">获取失败：${esc(r.error || '未知错误')}</span>`;
+    }
+  } catch (e) {
+    wrap.innerHTML = `<span class="test-result err">获取失败：${esc(e.message)}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '获取模型';
+  }
+}
+
 function renderRoutes() {
   const box = $('tab-routes');
   const entries = Object.entries(state.routes || {});
@@ -429,8 +519,13 @@ function renderRoutes() {
     box.innerHTML = '<div class="empty">还没有路由，点下方按钮添加</div>';
   } else {
     box.innerHTML = entries.map(([model, ps], idx) => {
-      const chips = ps.map((pname, pi) =>
-        `<span class="chip ${pi === 0 ? 'primary' : ''}">${esc(pname)}<button data-rm="${idx}|${pi}" title="移除">×</button></span>`).join('');
+      const chips = ps.map((pname, pi) => `
+        <span class="chip ${pi === 0 ? 'primary' : ''}">
+          ${esc(pname)}
+          <button class="mv" data-move="${idx}|${pi}|-1" ${pi === 0 ? 'disabled' : ''} title="前移（优先级更高）">↑</button>
+          <button class="mv" data-move="${idx}|${pi}|1" ${pi === ps.length - 1 ? 'disabled' : ''} title="后移（优先级更低）">↓</button>
+          <button data-rm="${idx}|${pi}" title="移除">×</button>
+        </span>`).join('');
       const options = state.providers
         .filter((p) => !ps.includes(p.name))
         .map((p) => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
@@ -494,6 +589,18 @@ function renderRoutes() {
       const [model, ps] = entries2[ri];
       ps.splice(pi, 1);
       if (!ps.length) delete state.routes[model];
+      setDirty(true);
+      renderRoutes();
+    };
+  });
+  box.querySelectorAll('[data-move]').forEach((b) => {
+    b.onclick = () => {
+      const [ri, pi, dir] = b.dataset.move.split('|');
+      const entries2 = Object.entries(state.routes);
+      const [, ps] = entries2[+ri];
+      const from = +pi, to = from + (+dir);
+      if (to < 0 || to >= ps.length) return;
+      [ps[from], ps[to]] = [ps[to], ps[from]];
       setDirty(true);
       renderRoutes();
     };

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **管理面板交互增强**：路由页支持用 ↑/↓ 直接调整服务商 fallback 顺序；
+  服务商页的 API key 默认打码显示，可单个/全部切换显示与隐藏；新增"获取模型"
+  按钮，可从服务商自己的 API（openai 走 `{base_url}/models`、anthropic 走
+  `{base_url}/v1/models`）拉取可用模型列表并一键填入测试框。
+
 ## [v0.1.2] - 2026-08-16
 
 ### Added

@@ -95,6 +95,9 @@ The panel lets you:
 
 - edit gateway settings, providers (name / base_url / type / key list), and the
   model → provider routing table, or edit the raw YAML directly;
+- reorder the provider fallback order in a route with ↑/↓ (first = primary);
+- show/hide API keys (masked by default), and fetch the model list straight
+  from a provider's own API (`/models`) with one click;
 - test a provider or a route with one click (sends a tiny chat request through
   the real routing);
 - save changes: they are written back to `config.yaml` atomically, and the
@@ -285,6 +288,9 @@ admin:
 
 - 编辑网关设置、服务商（名称 / base_url / 类型 / key 列表）和 model → provider
   路由表，也可以直接编辑原始 YAML；
+- 路由中可用 ↑/↓ 直接调整服务商顺序（第一个为主，其余按序 fallback）；
+- API key 默认打码显示，可单个或全部切换显示/隐藏；
+- 一键从服务商自己的 API（`/models`）拉取可用模型列表，选中即填入测试框；
 - 一键测试某个服务商或路由（通过真实路由发一条极小的 chat 请求）；
 - 保存：原子写回 `config.yaml`，网关约 1 秒内热重载生效，**无需重启**。
 
