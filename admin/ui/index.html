@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>aiapiport 管理面板</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a22; --panel2: #1e2230; --border: #2a2f3d;
+    --text: #e6e9f0; --muted: #8b93a7; --accent: #4f8cff; --accent2: #3b6fd8;
+    --ok: #34c77b; --err: #ff5d6c; --warn: #f5a623;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  input, select, textarea {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; font: inherit; width: 100%;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  button { cursor: pointer; }
+  .btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 14px; font: inherit; white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: var(--accent2); }
+  .btn.primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.danger { color: var(--err); }
+  .btn.danger:hover { border-color: var(--err); }
+  .btn.small { padding: 3px 9px; font-size: 12px; }
+  .btn.ghost { background: transparent; }
+
+  /* login */
+  #login {
+    position: fixed; inset: 0; background: var(--bg); display: none;
+    align-items: center; justify-content: center; z-index: 50;
+  }
+  #login.show { display: flex; }
+  .login-box { width: 380px; max-width: 92vw; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 32px; }
+  .login-box h1 { margin: 0 0 6px; font-size: 20px; }
+  .login-box p { margin: 0 0 20px; color: var(--muted); }
+  .login-box .btn { width: 100%; margin-top: 14px; }
+  .login-err { color: var(--err); font-size: 13px; margin-top: 10px; min-height: 18px; }
+
+  /* layout */
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 12px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.ok { background: var(--ok); }
+  .dot.err { background: var(--err); }
+  .spacer { flex: 1; }
+  .path { color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+  .dirty-tag { color: var(--warn); font-size: 12px; display: none; }
+  .dirty-tag.on { display: inline; }
+
+  nav { display: flex; gap: 4px; padding: 10px 20px 0; border-bottom: 1px solid var(--border); }
+  nav button {
+    background: transparent; border: none; color: var(--muted); font: inherit;
+    padding: 9px 16px; border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+
+  main { padding: 20px; max-width: 1080px; margin: 0 auto; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 14px;
+  }
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .card-head input[type=text] { width: auto; flex: 1; min-width: 160px; font-weight: 600; }
+  .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border);
+    color: var(--muted); white-space: nowrap;
+  }
+  .badge.openai { color: #7fb8ff; border-color: #3d5a8a; }
+  .badge.anthropic { color: #f2a37e; border-color: #8a5a3d; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  label { display: block; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+  label input, label select, label textarea { margin-top: 4px; color: var(--text); }
+
+  .test-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .test-row input { width: 220px; }
+  .test-result { font-size: 12px; max-width: 100%; word-break: break-all; }
+  .test-result.ok { color: var(--ok); }
+  .test-result.err { color: var(--err); }
+  .test-result.warn { color: var(--warn); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 20px; padding: 3px 8px 3px 12px; font-size: 13px;
+  }
+  .chip button { background: none; border: none; color: var(--muted); font-size: 14px; padding: 0 2px; }
+  .chip button:hover { color: var(--err); }
+  .chip.primary { border-color: var(--accent); color: #bcd4ff; }
+
+  .empty { color: var(--muted); text-align: center; padding: 30px 0; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .hint code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .stat b { display: block; font-size: 22px; }
+  .stat span { color: var(--muted); font-size: 12px; }
+
+  #rawBox { width: 100%; height: 56vh; resize: vertical; }
+
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 18px; opacity: 0; transition: .25s; pointer-events: none; z-index: 60;
+    max-width: 80vw;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.ok { border-color: var(--ok); color: var(--ok); }
+  #toast.err { border-color: var(--err); color: var(--err); }
+
+  .keys-toggle { font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="login-box">
+    <h1>🔑 aiapiport 管理面板</h1>
+    <p>输入网关鉴权密钥（config 中的 <code>server.auth_key</code>）</p>
+    <input type="password" id="loginKey" placeholder="sk-..." autocomplete="current-password">
+    <div class="login-err" id="loginErr"></div>
+    <button class="btn primary" id="loginBtn">进入</button>
+  </div>
+</div>
+
+<header>
+  <h1><span class="dot" id="statusDot"></span> aiapiport 管理面板</h1>
+  <span class="path" id="cfgPath"></span>
+  <span class="dirty-tag" id="dirtyTag">● 有未保存修改</span>
+  <span class="spacer"></span>
+  <button class="btn" id="logoutBtn" title="清除本地密钥">退出</button>
+  <button class="btn primary" id="saveBtn" disabled>保存并生效</button>
+</header>
+
+<nav>
+  <button data-tab="overview" class="active">概览</button>
+  <button data-tab="providers">服务商</button>
+  <button data-tab="routes">路由</button>
+  <button data-tab="raw">原始配置</button>
+</nav>
+
+<main>
+  <section class="tab active" id="tab-overview">
+    <div class="stat-grid" id="stats"></div>
+    <div class="card">
+      <h3 style="margin:0 0 12px">网关设置</h3>
+      <div class="grid2">
+        <label>监听地址（server.listen）
+          <input type="text" id="ov-listen" placeholder=":4000">
+        </label>
+        <label>鉴权密钥（server.auth_key）
+          <input type="password" id="ov-auth" autocomplete="off">
+        </label>
+      </div>
+      <label style="margin-top:4px">管理面板端口（admin.listen，需重启后生效）
+        <input type="text" id="ov-admin" placeholder=":4001" style="width:220px">
+      </label>
+    </div>
+    <div class="card">
+      <h3 style="margin:0 0 8px">说明</h3>
+      <div class="hint">
+        修改后点击右上角 <b>保存并生效</b>，配置会原子写回 <code>config.yaml</code>，
+        网关约 1 秒内自动热重载，<b>无需重启</b>。<br>
+        编辑结构（服务商/路由）或直接编辑原始 YAML 均可；
+        通过结构表单保存时会重写为规范化 YAML，原注释会丢失（原始配置页会保留你的手写注释，直到保存）。
+      </div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-providers"></section>
+  <section class="tab" id="tab-routes"></section>
+  <section class="tab" id="tab-raw">
+    <div class="card">
+      <div class="card-head">
+        <b>config.yaml 原文</b>
+        <span class="spacer"></span>
+        <button class="btn primary" id="rawSaveBtn">保存原始配置</button>
+      </div>
+      <div class="hint" style="margin-bottom:10px">
+        直接编辑 YAML；保存时会先校验再写入。注释会在本次保存后被规范化重写去掉。
+      </div>
+      <textarea id="rawBox" spellcheck="false"></textarea>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+<datalist id="model-list"></datalist>
+
+<script>
+const LS_KEY = 'aiapiport_admin_key';
+let key = localStorage.getItem(LS_KEY) || '';
+let state = { server: { listen: '', auth_key: '' }, admin: null, providers: [], routes: {} };
+let rawText = '';
+let dirty = false;
+let cfgPath = '';
+
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Admin-Key': key,
+      ...(opts.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+function toast(msg, type = 'ok') {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'show ' + type;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.className = '', 3200);
+}
+
+function setDirty(v) {
+  dirty = v;
+  $('dirtyTag').classList.toggle('on', v);
+  $('saveBtn').disabled = !v;
+}
+
+/* ---------- login ---------- */
+function showLogin() {
+  $('login').classList.add('show');
+  setTimeout(() => $('loginKey').focus(), 50);
+}
+function hideLogin() { $('login').classList.remove('show'); }
+
+$('loginBtn').onclick = async () => {
+  const k = $('loginKey').value.trim();
+  if (!k) return;
+  key = k;
+  try {
+    await loadConfig();
+    localStorage.setItem(LS_KEY, key);
+    hideLogin();
+  } catch (e) {
+    $('loginErr').textContent = e.message === 'unauthorized' ? '密钥不正确' : '连接失败：' + e.message;
+  }
+};
+$('loginKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loginBtn').click(); });
+$('logoutBtn').onclick = () => {
+  localStorage.removeItem(LS_KEY);
+  key = '';
+  showLogin();
+};
+
+/* ---------- load ---------- */
+async function loadConfig() {
+  const data = await api('/api/config');
+  state = data.config || state;
+  if (!state.admin) state.admin = { listen: '' };
+  rawText = data.raw || '';
+  cfgPath = data.path || '';
+  $('cfgPath').textContent = cfgPath;
+  render();
+  setDirty(false);
+  checkHealth();
+}
+
+async function checkHealth() {
+  try {
+    const h = await api('/api/health');
+    $('statusDot').className = h.ok ? 'dot ok' : 'dot err';
+  } catch { $('statusDot').className = 'dot err'; }
+}
+setInterval(checkHealth, 15000);
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('nav button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
+    render();
+  };
+});
+
+function activeTab() {
+  return document.querySelector('nav button.active').dataset.tab;
+}
+
+/* ---------- render ---------- */
+function render() {
+  switch (activeTab()) {
+    case 'overview': renderOverview(); break;
+    case 'providers': renderProviders(); break;
+    case 'routes': renderRoutes(); break;
+    case 'raw': renderRaw(); break;
+  }
+  renderModelList();
+}
+
+function renderOverview() {
+  const models = Object.keys(state.routes || {});
+  $('stats').innerHTML = `
+    <div class="stat"><b>${state.providers.length}</b><span>服务商</span></div>
+    <div class="stat"><b>${models.length}</b><span>路由模型</span></div>
+    <div class="stat"><b>${state.providers.reduce((n, p) => n + (p.keys || []).length, 0)}</b><span>API Key 总数</span></div>
+    <div class="stat"><b>${state.server.listen || '-'}</b><span>网关端口</span></div>`;
+  const ovListen = $('ov-listen'), ovAuth = $('ov-auth'), ovAdmin = $('ov-admin');
+  if (document.activeElement !== ovListen) ovListen.value = state.server.listen || '';
+  if (document.activeElement !== ovAuth) ovAuth.value = state.server.auth_key || '';
+  ovAdmin.value = (state.admin && state.admin.listen) || '';
+  ovListen.oninput = () => { state.server.listen = ovListen.value.trim(); setDirty(true); };
+  ovAuth.oninput = () => { state.server.auth_key = ovAuth.value.trim(); setDirty(true); };
+  ovAdmin.oninput = () => {
+    state.admin = state.admin || {};
+    state.admin.listen = ovAdmin.value.trim();
+    setDirty(true);
+  };
+}
+
+function renderModelList() {
+  $('model-list').innerHTML = Object.keys(state.routes || {})
+    .map((m) => `<option value="${esc(m)}">`).join('');
+}
+
+function renderProviders() {
+  const box = $('tab-providers');
+  if (!state.providers.length) {
+    box.innerHTML = '<div class="empty">还没有服务商，点下方按钮添加</div>';
+  } else {
+    box.innerHTML = state.providers.map((p, i) => `
+      <div class="card">
+        <div class="card-head">
+          <input type="text" value="${esc(p.name)}" placeholder="服务商名称" data-f="name" data-i="${i}">
+          <span class="badge ${esc(p.type || 'openai')}">${esc(p.type || 'openai')}</span>
+          <button class="btn danger" data-del="${i}">删除</button>
+        </div>
+        <div class="grid2">
+          <label>Base URL<input type="text" value="${esc(p.base_url || '')}" placeholder="https://api.example.com/v1" data-f="url" data-i="${i}"></label>
+          <label>类型
+            <select data-f="type" data-i="${i}">
+              <option value="openai" ${p.type === 'openai' ? 'selected' : ''}>openai（OpenAI 兼容）</option>
+              <option value="anthropic" ${p.type === 'anthropic' ? 'selected' : ''}>anthropic（Claude 直连）</option>
+            </select>
+          </label>
+        </div>
+        <label>Keys（每行一个，第一行优先）
+          <textarea rows="${Math.max(1, (p.keys || []).length)}" data-f="keys" data-i="${i}" spellcheck="false">${esc((p.keys || []).join('\n'))}</textarea>
+        </label>
+        <div class="test-row">
+          <input type="text" list="model-list" placeholder="测试用的模型名（走完整路由）" data-test-model="${i}">
+          <button class="btn small" data-test="${i}">测试</button>
+          <span class="test-result" data-result="${i}"></span>
+        </div>
+      </div>`).join('');
+  }
+  box.insertAdjacentHTML('beforeend', '<button class="btn primary" id="addProviderBtn">+ 添加服务商</button>');
+
+  $('addProviderBtn').onclick = () => {
+    state.providers.push({ name: '', base_url: '', type: 'openai', keys: [''] });
+    setDirty(true);
+    renderProviders();
+  };
+
+  box.querySelectorAll('input[data-f], select[data-f], textarea[data-f]').forEach((el) => {
+    el.addEventListener('input', () => {
+      const i = +el.dataset.i, p = state.providers[i];
+      switch (el.dataset.f) {
+        case 'name': p.name = el.value.trim(); break;
+        case 'url': p.base_url = el.value.trim(); break;
+        case 'type': p.type = el.value; break;
+        case 'keys':
+          p.keys = el.value.split('\n').map((s) => s.trim()).filter(Boolean);
+          break;
+      }
+      setDirty(true);
+    });
+  });
+  box.querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = () => {
+      const i = +b.dataset.del, name = state.providers[i].name;
+      const usedBy = Object.entries(state.routes).filter(([, ps]) => ps.includes(name)).map(([m]) => m);
+      if (usedBy.length) {
+        toast('无法删除：仍被路由 ' + usedBy.join('、') + ' 引用', 'err');
+        return;
+      }
+      if (!confirm('删除服务商「' + (name || '(未命名)') + '」？')) return;
+      state.providers.splice(i, 1);
+      setDirty(true);
+      renderProviders();
+    };
+  });
+  box.querySelectorAll('[data-test]').forEach((b) => {
+    b.onclick = () => {
+      const i = +b.dataset.test;
+      const model = box.querySelector(`[data-test-model="${i}"]`).value.trim();
+      const p = state.providers[i];
+      if (!model) { toast('请先填写测试模型名', 'err'); return; }
+      runTest(model, p.name, box.querySelector(`[data-result="${i}"]`), 'provider');
+    };
+  });
+}
+
+function renderRoutes() {
+  const box = $('tab-routes');
+  const entries = Object.entries(state.routes || {});
+  if (!entries.length) {
+    box.innerHTML = '<div class="empty">还没有路由，点下方按钮添加</div>';
+  } else {
+    box.innerHTML = entries.map(([model, ps], idx) => {
+      const chips = ps.map((pname, pi) =>
+        `<span class="chip ${pi === 0 ? 'primary' : ''}">${esc(pname)}<button data-rm="${idx}|${pi}" title="移除">×</button></span>`).join('');
+      const options = state.providers
+        .filter((p) => !ps.includes(p.name))
+        .map((p) => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
+      return `
+      <div class="card">
+        <div class="card-head">
+          <input type="text" value="${esc(model)}" placeholder="模型名（客户端请求的 model）" data-model="${idx}">
+          <button class="btn danger" data-delroute="${idx}">删除</button>
+        </div>
+        <div class="chips">${chips}</div>
+        <div class="test-row">
+          <select class="r-add" data-add="${idx}" style="width:auto">
+            <option value="">+ 添加服务商（按顺序 fallback）…</option>${options}
+          </select>
+          <button class="btn small" data-testroute="${idx}">测试该路由</button>
+          <span class="test-result" data-resultroute="${idx}"></span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+  box.insertAdjacentHTML('beforeend', '<button class="btn primary" id="addRouteBtn">+ 添加路由</button>');
+
+  $('addRouteBtn').onclick = () => {
+    if (!state.providers.length) { toast('请先添加服务商', 'err'); return; }
+    let name = 'new-model-' + (Object.keys(state.routes).length + 1);
+    while (state.routes[name]) name = name + '-x';
+    state.routes[name] = [state.providers[0].name];
+    setDirty(true);
+    renderRoutes();
+  };
+
+  box.querySelectorAll('input[data-model]').forEach((el) => {
+    el.addEventListener('change', () => {
+      const entries2 = Object.entries(state.routes);
+      const idx = +el.dataset.model, [oldName, ps] = entries2[idx];
+      const newName = el.value.trim();
+      if (!newName) { el.value = oldName; return; }
+      if (newName !== oldName) {
+        if (state.routes[newName]) { toast('模型名「' + newName + '」已存在', 'err'); el.value = oldName; return; }
+        delete state.routes[oldName];
+        state.routes[newName] = ps;
+      }
+      setDirty(true);
+      renderRoutes();
+    });
+  });
+  box.querySelectorAll('[data-delroute]').forEach((b) => {
+    b.onclick = () => {
+      const entries2 = Object.entries(state.routes);
+      const [model] = entries2[+b.dataset.delroute];
+      if (!confirm('删除路由「' + model + '」？')) return;
+      delete state.routes[model];
+      setDirty(true);
+      renderRoutes();
+    };
+  });
+  box.querySelectorAll('[data-rm]').forEach((b) => {
+    b.onclick = () => {
+      const [ri, pi] = b.dataset.rm.split('|').map(Number);
+      const entries2 = Object.entries(state.routes);
+      const [model, ps] = entries2[ri];
+      ps.splice(pi, 1);
+      if (!ps.length) delete state.routes[model];
+      setDirty(true);
+      renderRoutes();
+    };
+  });
+  box.querySelectorAll('[data-add]').forEach((sel) => {
+    sel.addEventListener('change', () => {
+      const v = sel.value;
+      if (!v) return;
+      const entries2 = Object.entries(state.routes);
+      const [, ps] = entries2[+sel.dataset.add];
+      ps.push(v);
+      setDirty(true);
+      renderRoutes();
+    });
+  });
+  box.querySelectorAll('[data-testroute]').forEach((b) => {
+    b.onclick = () => {
+      const entries2 = Object.entries(state.routes);
+      const [model] = entries2[+b.dataset.testroute];
+      runTest(model, '', box.querySelector(`[data-resultroute="${b.dataset.testroute}"]`), 'route');
+    };
+  });
+}
+
+function renderRaw() {
+  const box = $('rawBox');
+  if (document.activeElement !== box) box.value = rawText;
+}
+
+$('rawSaveBtn').onclick = async () => {
+  rawText = $('rawBox').value;
+  await saveRaw(rawText);
+};
+
+$('saveBtn').onclick = async () => {
+  if (!dirty) return;
+  await saveStructured();
+};
+
+async function saveStructured() {
+  const payload = { config: JSON.parse(JSON.stringify(state)) };
+  if (!payload.config.admin || !payload.config.admin.listen) delete payload.config.admin;
+  try {
+    const r = await api('/api/config', { method: 'PUT', body: JSON.stringify(payload) });
+    await loadConfig();
+    toast(r.message || '已保存');
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  }
+}
+
+async function saveRaw(text) {
+  try {
+    const r = await api('/api/config', { method: 'PUT', body: JSON.stringify({ raw: text }) });
+    await loadConfig();
+    toast(r.message || '已保存');
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  }
+}
+
+async function runTest(model, provider, el, kind) {
+  el.className = 'test-result warn';
+  el.textContent = '测试中…';
+  try {
+    const r = await api('/api/test', {
+      method: 'POST',
+      body: JSON.stringify({ model, provider }),
+    });
+    if (r.ok) {
+      el.className = 'test-result ok';
+      el.textContent = `✅ ${r.provider} key#${r.key_index} HTTP ${r.status}：${(r.reply || '').slice(0, 160)}`;
+    } else {
+      el.className = 'test-result err';
+      el.textContent = '❌ ' + (r.error || '测试失败');
+    }
+  } catch (e) {
+    el.className = 'test-result err';
+    el.textContent = '❌ ' + e.message;
+  }
+}
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* ---------- boot ---------- */
+(async () => {
+  if (key) {
+    try { await loadConfig(); return; } catch (e) { /* fall through to login */ }
+  }
+  showLogin();
+})();
+</script>
+</body>
+</html>

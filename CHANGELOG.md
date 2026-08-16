@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **网页管理面板（Admin UI）**：新增 `admin.listen` 配置项，可启动独立端口的
+  网页版配置编辑器。浏览器打开后使用 `server.auth_key` 登录，即可在界面中
+  增删改服务商、编辑 model → provider 路由、直接编辑原始 YAML，并一键测试
+  服务商/路由连通性。保存后配置原子写回 `config.yaml`，网关约 1 秒内热重载
+  生效，无需重启。管理面板内嵌于二进制（`go:embed`），无外部依赖。
+
 ## [v0.1.1] - 2026-07-28
 
 ### Fixed

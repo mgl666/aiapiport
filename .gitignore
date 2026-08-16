@@ -1,6 +1,7 @@
 # compiled binaries
 /aiapiport-bin
 /aiapiport-bin.exe
+/aiapiport
 /dist/
 /build/
 *.egg-info/

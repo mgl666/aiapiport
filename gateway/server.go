@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -22,14 +25,8 @@ type Server struct {
 	regs   *provider.Registry
 }
 
-func New(cfg *config.Config, regs *provider.Registry) *Server {
-	nonStream := &http.Client{Timeout: 120 * time.Second}
-	stream := &http.Client{Timeout: 0} // streaming timeout is controlled by request context
-
-	regs = provider.NewRegistry()
-	regs.Register("openai", &provider.OpenAIAdapter{NonStreamClient: nonStream, StreamClient: stream})
-	regs.Register("anthropic", &provider.AnthropicAdapter{NonStreamClient: nonStream, StreamClient: stream})
-
+func New(cfg *config.Config) *Server {
+	regs := provider.NewDefaultRegistry()
 	return &Server{
 		cfg:    cfg,
 		router: router.New(cfg, regs),
@@ -57,6 +54,81 @@ func (s *Server) snapshot() (*config.Config, *router.Router) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cfg, s.router
+}
+
+// TestResult summarizes one admin-panel "test" run.
+type TestResult struct {
+	OK       bool   `json:"ok"`
+	Provider string `json:"provider,omitempty"`
+	KeyIndex int    `json:"key_index,omitempty"`
+	Status   int    `json:"status,omitempty"`
+	Attempts int    `json:"attempts"`
+	Reply    string `json:"reply,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// TestChat sends a tiny non-streaming chat request through the live routing for
+// model (or directly to providerName when non-empty) and reports the outcome.
+// Used by the admin panel. Up to 3 upstream attempts to avoid burning quota on
+// an intentionally triggered test.
+func (s *Server) TestChat(ctx context.Context, model, providerName string) TestResult {
+	body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"ping"}],"max_tokens":8,"stream":false}`, model))
+	cfg, rt := s.snapshot()
+
+	var providers []config.Provider
+	if providerName != "" {
+		p, ok := cfg.FindProvider(providerName)
+		if !ok {
+			return TestResult{Error: fmt.Sprintf("provider %q not found", providerName)}
+		}
+		providers = []config.Provider{p}
+	} else {
+		pnames, err := rt.ProviderNames(model)
+		if err != nil {
+			return TestResult{Error: err.Error()}
+		}
+		for _, pname := range pnames {
+			if p, ok := cfg.FindProvider(pname); ok {
+				providers = append(providers, p)
+			}
+		}
+	}
+
+	const maxAttempts = 3
+	attempts := 0
+	var lastErr error
+	for _, p := range providers {
+		for ki := range p.Keys {
+			if attempts >= maxAttempts {
+				break
+			}
+			attempts++
+			res, err := rt.AttemptProvider(ctx, p, body, model, false, ki)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if res.Err != nil {
+				lastErr = res.Err
+				continue
+			}
+			snippet, _ := io.ReadAll(io.LimitReader(res.Resp.Body, 512))
+			_ = res.Resp.Body.Close()
+			detail := strings.TrimSpace(string(snippet))
+			if res.Retryable {
+				lastErr = fmt.Errorf("%s returned HTTP %d: %s", p.Name, res.Resp.StatusCode, detail)
+				continue
+			}
+			if res.Resp.StatusCode >= 200 && res.Resp.StatusCode < 300 {
+				return TestResult{OK: true, Provider: p.Name, KeyIndex: ki, Status: res.Resp.StatusCode, Attempts: attempts, Reply: detail}
+			}
+			lastErr = fmt.Errorf("%s returned HTTP %d: %s", p.Name, res.Resp.StatusCode, detail)
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("all attempts failed")
+	}
+	return TestResult{Attempts: attempts, Error: lastErr.Error()}
 }
 
 // Handler returns the HTTP handler for the gateway.

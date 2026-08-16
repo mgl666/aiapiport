@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 // Adapter forwards an OpenAI-format request to an upstream API.
@@ -34,4 +35,15 @@ func (r *Registry) Register(typeName string, a Adapter) {
 func (r *Registry) Get(typeName string) (Adapter, bool) {
 	a, ok := r.adapters[typeName]
 	return a, ok
+}
+
+// NewDefaultRegistry returns a registry pre-populated with the built-in
+// OpenAI and Anthropic adapters.
+func NewDefaultRegistry() *Registry {
+	nonStream := &http.Client{Timeout: 120 * time.Second}
+	stream := &http.Client{Timeout: 0} // streaming timeout is controlled by request context
+	r := NewRegistry()
+	r.Register("openai", &OpenAIAdapter{NonStreamClient: nonStream, StreamClient: stream})
+	r.Register("anthropic", &AnthropicAdapter{NonStreamClient: nonStream, StreamClient: stream})
+	return r
 }

@@ -73,11 +73,37 @@ routes:
 |---|---|---|
 | `server.listen` | yes | TCP address, e.g. `:8787` or `127.0.0.1:8787` |
 | `server.auth_key` | yes | Gateway secret — clients pass as `Authorization: Bearer <key>` |
+| `admin.listen` | no | Optional web admin panel address, e.g. `:4001`. Panel not started when empty |
 | `providers[].name` | yes | Unique label used in `routes` |
 | `providers[].base_url` | yes | Upstream API root (no trailing slash) |
 | `providers[].type` | yes | `openai` or `anthropic` |
 | `providers[].keys` | yes | One or more API keys — first key is primary, rest are fallback |
 | `routes` | yes | Map of model name → list of provider names (ordered fallback) |
+
+### Web admin panel
+
+Set `admin.listen` in `config.yaml` to enable a browser-based config editor on its
+own port (e.g. `:4001`). Open `http://your-host:4001` and log in with the same
+`server.auth_key` used by clients.
+
+```yaml
+admin:
+  listen: ":4001"
+```
+
+The panel lets you:
+
+- edit gateway settings, providers (name / base_url / type / key list), and the
+  model → provider routing table, or edit the raw YAML directly;
+- test a provider or a route with one click (sends a tiny chat request through
+  the real routing);
+- save changes: they are written back to `config.yaml` atomically, and the
+  gateway hot-reloads within ~1 second — no restart needed.
+
+Notes: the admin port is plain HTTP like the gateway — bind it to `127.0.0.1:4001`
+or protect it with a firewall if you expose the host. Changing `admin.listen`
+itself requires a restart. Saving via the structured editor rewrites the file to
+canonical YAML, so comments are dropped (the raw tab keeps them until you save).
 
 ### Usage
 
@@ -166,7 +192,8 @@ ssh root@vps "systemctl daemon-reload && systemctl enable --now aiapiport"
 | Multi-provider fallback (model → multiple providers) | ✅ |
 | Gateway auth key | ✅ |
 | model → provider routing | ✅ |
-| Virtual keys / usage stats / Admin UI | ✗ (use LiteLLM) |
+| Admin UI (web config editor) | ✅ |
+| Virtual keys / usage stats | ✗ (use LiteLLM) |
 
 ---
 
@@ -237,11 +264,33 @@ routes:
 |---|---|---|
 | `server.listen` | 是 | 监听地址，如 `:8787` 或 `127.0.0.1:8787` |
 | `server.auth_key` | 是 | 网关密钥，客户端用 `Authorization: Bearer <key>` 传入 |
+| `admin.listen` | 否 | 可选网页管理面板监听地址，如 `:4001`；留空则不启动 |
 | `providers[].name` | 是 | provider 唯一标识，在 `routes` 中引用 |
 | `providers[].base_url` | 是 | 上游 API 根地址（不含末尾斜杠） |
 | `providers[].type` | 是 | `openai` 或 `anthropic` |
 | `providers[].keys` | 是 | API key 列表，第一个为主 key，其余为备用 |
 | `routes` | 是 | model 名 → provider 名列表（按顺序 fallback） |
+
+### 网页管理面板
+
+在 `config.yaml` 里配置 `admin.listen` 即可启用网页版配置编辑器（独立端口，如 `:4001`）。
+浏览器打开 `http://你的服务器:4001`，用和客户端相同的 `server.auth_key` 登录。
+
+```yaml
+admin:
+  listen: ":4001"
+```
+
+面板支持：
+
+- 编辑网关设置、服务商（名称 / base_url / 类型 / key 列表）和 model → provider
+  路由表，也可以直接编辑原始 YAML；
+- 一键测试某个服务商或路由（通过真实路由发一条极小的 chat 请求）；
+- 保存：原子写回 `config.yaml`，网关约 1 秒内热重载生效，**无需重启**。
+
+注意：管理端口和网关一样是明文 HTTP——若机器暴露在外网，建议绑 `127.0.0.1:4001`
+或用防火墙保护。修改 `admin.listen` 本身需要重启。通过结构化表单保存会把文件重写为
+规范化 YAML（注释会丢失）；原始配置页在你保存前会一直保留手写注释。
 
 ### 使用
 
@@ -317,4 +366,5 @@ go build -ldflags "-s -w" -trimpath -o aiapiport .
 | 多 provider fallback（一个 model → 多个 provider） | ✅ |
 | 网关固定 key 鉴权 | ✅ |
 | model → provider 路由 | ✅ |
-| 虚拟 key / 用量统计 / Admin UI | ✗（请用 LiteLLM） |
+| Admin UI（网页配置编辑器） | ✅ |
+| 虚拟 key / 用量统计 | ✗（请用 LiteLLM） |

@@ -24,9 +24,9 @@ func New(cfg *config.Config, regs *provider.Registry) *Router {
 
 // Result is the outcome of one routing attempt.
 //   - If fallback should be attempted:
-//       Retryable == true, Resp may be nil
+//     Retryable == true, Resp may be nil
 //   - If the result should be returned to the client as-is:
-//       Retryable == false (Resp may still be an error status)
+//     Retryable == false (Resp may still be an error status)
 type Result struct {
 	Resp      *http.Response
 	Retryable bool  // true means the handler should try the next key
@@ -53,6 +53,12 @@ func (r *Router) Attempt(ctx context.Context, model string, reqBody []byte, isSt
 	if !ok {
 		return Result{Retryable: false}, fmt.Errorf("route %q -> missing provider %q", model, pname)
 	}
+	return r.AttemptProvider(ctx, p, reqBody, model, isStream, keyIndex)
+}
+
+// AttemptProvider sends one request to a specific provider using the key at
+// keyIndex, bypassing route lookup. Used by the admin panel for direct tests.
+func (r *Router) AttemptProvider(ctx context.Context, p config.Provider, reqBody []byte, model string, isStream bool, keyIndex int) (Result, error) {
 	if keyIndex >= len(p.Keys) {
 		return Result{Retryable: false}, fmt.Errorf("keyIndex out of range")
 	}

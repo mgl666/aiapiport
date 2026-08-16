@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"aiapiport/admin"
 	"aiapiport/config"
 	"aiapiport/gateway"
-	"aiapiport/provider"
 )
 
 const version = "0.1.1"
@@ -117,9 +118,20 @@ func cmdServe(args []string) {
 		cfg.Server.Listen = ":" + strings.TrimPrefix(*port, ":")
 	}
 
-	regs := provider.NewRegistry()
-	srv := gateway.New(cfg, regs)
+	srv := gateway.New(cfg)
 	go watchConfig(*cfgPath, srv)
+
+	// Optional web admin panel on its own port (config: admin.listen).
+	if cfg.Admin != nil && cfg.Admin.Listen != "" {
+		adm := admin.New(cfg, *cfgPath, srv)
+		admServer := &http.Server{Addr: cfg.Admin.Listen, Handler: adm.Handler()}
+		go func() {
+			slog.Info("admin panel listening", "addr", cfg.Admin.Listen)
+			if err := admServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("admin panel server", "err", err)
+			}
+		}()
+	}
 
 	httpServer := &http.Server{
 		Addr:    cfg.Server.Listen,
