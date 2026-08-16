@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [v0.1.2] - 2026-08-16
 
 ### Added
 
@@ -39,6 +39,7 @@ All notable changes to this project will be documented in this file.
 - **健康检查**：`GET /health` 端点用于监控探活。
 - **模型列表**：`GET /v1/models` 返回 OpenAI 格式的模型列表。
 
-[Unreleased]: https://github.com/mgl666/aiapiport/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/mgl666/aiapiport/compare/v0.1.2...HEAD
+[v0.1.2]: https://github.com/mgl666/aiapiport/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/mgl666/aiapiport/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/mgl666/aiapiport/releases/tag/v0.1.0
