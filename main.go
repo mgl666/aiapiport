@@ -16,7 +16,7 @@ import (
 	"aiapiport/gateway"
 )
 
-const version = "0.1.2"
+const version = "0.1.3"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `aiapiport - lightweight LLM gateway v%s
