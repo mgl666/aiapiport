@@ -59,6 +59,13 @@ func (r *Router) Attempt(ctx context.Context, model string, reqBody []byte, isSt
 // AttemptProvider sends one request to a specific provider using the key at
 // keyIndex, bypassing route lookup. Used by the admin panel for direct tests.
 func (r *Router) AttemptProvider(ctx context.Context, p config.Provider, reqBody []byte, model string, isStream bool, keyIndex int) (Result, error) {
+	return r.AttemptProviderPath(ctx, p, provider.ChatPath, reqBody, model, isStream, keyIndex)
+}
+
+// AttemptProviderPath is AttemptProvider for an arbitrary upstream path
+// (e.g. "/embeddings"). The chat path works with every adapter; any other path
+// requires an adapter that implements provider.PathAdapter.
+func (r *Router) AttemptProviderPath(ctx context.Context, p config.Provider, path string, reqBody []byte, model string, isStream bool, keyIndex int) (Result, error) {
 	if keyIndex >= len(p.Keys) {
 		return Result{Retryable: false}, fmt.Errorf("keyIndex out of range")
 	}
@@ -66,14 +73,48 @@ func (r *Router) AttemptProvider(ctx context.Context, p config.Provider, reqBody
 	if !ok {
 		return Result{Retryable: false}, fmt.Errorf("no adapter for type %q (provider %q)", p.Type, p.Name)
 	}
-	resp, err := adapter.Do(ctx, p.BaseURL, p.Keys[keyIndex], reqBody, model, isStream)
+
+	var (
+		resp *http.Response
+		err  error
+	)
+	if path == provider.ChatPath {
+		resp, err = adapter.Do(ctx, p.BaseURL, p.Keys[keyIndex], reqBody, model, isStream)
+	} else {
+		pa, ok := adapter.(provider.PathAdapter)
+		if !ok {
+			return Result{Retryable: false}, fmt.Errorf("provider %q (type %s) cannot serve %s", p.Name, p.Type, path)
+		}
+		resp, err = pa.DoPath(ctx, p.BaseURL, p.Keys[keyIndex], path, reqBody, model, isStream)
+	}
 	if err != nil {
 		return Result{Retryable: true, Err: err}, nil
 	}
-	if resp.StatusCode == 402 || resp.StatusCode == 429 || resp.StatusCode >= 500 || resp.StatusCode == 401 || resp.StatusCode == 403 {
+	if retryableStatus(resp.StatusCode) {
 		return Result{Resp: resp, Retryable: true}, nil
 	}
 	return Result{Resp: resp, Retryable: false}, nil
+}
+
+// SupportsPath reports whether the provider's adapter can serve path, so the
+// gateway can skip e.g. a Claude-direct provider on /v1/embeddings instead of
+// burning a key attempt on a request it cannot translate.
+func (r *Router) SupportsPath(p config.Provider, path string) bool {
+	if path == provider.ChatPath {
+		return true
+	}
+	a, ok := r.regs.Get(p.Type)
+	if !ok {
+		return false
+	}
+	_, ok = a.(provider.PathAdapter)
+	return ok
+}
+
+// retryableStatus reports the upstream statuses that trigger key/provider
+// fallback: exhausted quota, rate limits, auth failures and server errors.
+func retryableStatus(code int) bool {
+	return code == 402 || code == 429 || code >= 500 || code == 401 || code == 403
 }
 
 // ProviderNames returns the ordered list of provider names for model.

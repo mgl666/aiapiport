@@ -148,8 +148,8 @@ func runDir() string {
 	return filepath.Join(home, ".aiapiport")
 }
 
-func pidFile() string  { return filepath.Join(runDir(), "aiapiport.pid") }
-func logFile() string  { return filepath.Join(runDir(), "aiapiport.log") }
+func pidFile() string { return filepath.Join(runDir(), "aiapiport.pid") }
+func logFile() string { return filepath.Join(runDir(), "aiapiport.log") }
 
 func ensureRunDir() {
 	if err := os.MkdirAll(runDir(), 0o755); err != nil {

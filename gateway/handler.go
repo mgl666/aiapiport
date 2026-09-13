@@ -38,14 +38,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if model == "" {
-		writeError(w, http.StatusBadRequest, `field "model" is required`)
+		writeErrorCode(w, http.StatusBadRequest, `field "model" is required`, "", "model")
 		return
 	}
 
 	cfg, rt := s.snapshot()
 	pnames, err := rt.ProviderNames(model)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeErrorCode(w, http.StatusNotFound, err.Error()+"; see GET /v1/models for the configured model names", "model_not_found", "model")
 		return
 	}
 
@@ -232,12 +232,40 @@ func drainBody(resp *http.Response) string {
 
 // writeError returns an OpenAI-style JSON error response.
 func writeError(w http.ResponseWriter, status int, message string) {
+	writeErrorCode(w, status, message, "", "")
+}
+
+// apiError mirrors the error object returned by the OpenAI API. Clients read
+// error.message/type/code, and non-JSON bodies (plain "unauthorized", the Go
+// default 404 text) surface as an unhelpful "unknown error" in most front-ends.
+type apiError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Code    string `json:"code,omitempty"`
+	Param   string `json:"param,omitempty"`
+}
+
+// writeErrorCode writes an OpenAI-style JSON error body.
+func writeErrorCode(w http.ResponseWriter, status int, message, code, param string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{
-			"message": message,
-			"type":    "gateway_error",
-		},
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false) // keep "<key>" readable in client UIs
+	_ = enc.Encode(map[string]any{
+		"error": apiError{Message: message, Type: errorType(status), Code: code, Param: param},
 	})
+}
+
+// errorType maps an HTTP status onto the error.type values the OpenAI API uses.
+func errorType(status int) string {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status >= 500:
+		return "api_error"
+	case status >= 400:
+		return "invalid_request_error"
+	default:
+		return "gateway_error"
+	}
 }

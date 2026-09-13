@@ -108,6 +108,29 @@ or protect it with a firewall if you expose the host. Changing `admin.listen`
 itself requires a restart. Saving via the structured editor rewrites the file to
 canonical YAML, so comments are dropped (the raw tab keeps them until you save).
 
+### Endpoints
+
+Every endpoint except `/health` requires the gateway key, sent as
+`Authorization: Bearer <key>`, `x-api-key: <key>` or `?key=<key>`.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /v1/chat/completions` | main endpoint — model routing, provider/key fallback, SSE streaming |
+| `POST /v1/completions` | legacy text completions, converted to a chat request upstream and converted back (streaming included) |
+| `POST /v1/responses` | relayed to the upstream `/responses` — the upstream must support it |
+| `POST /v1/embeddings` | relayed to the upstream `/embeddings` |
+| `GET /v1/models` | the models configured in `routes` |
+| `GET /v1/models/{id}` | a single model |
+| `GET /health` | unauthenticated liveness probe |
+
+CORS is enabled (preflight requests are answered), so browser-based front-ends can
+call the gateway from another origin. Every error — including 401, 404 and 405 — is
+OpenAI-shaped JSON: `{"error":{"message":…,"type":…,"code":…,"param":…}}`.
+
+The client base URL is `http://your-host:8787/v1`. Do not append
+`/chat/completions` yourself unless the client explicitly asks for the full path,
+or the request will end up at the wrong URL.
+
 ### Usage
 
 ```bash
@@ -297,6 +320,28 @@ admin:
 注意：管理端口和网关一样是明文 HTTP——若机器暴露在外网，建议绑 `127.0.0.1:4001`
 或用防火墙保护。修改 `admin.listen` 本身需要重启。通过结构化表单保存会把文件重写为
 规范化 YAML（注释会丢失）；原始配置页在你保存前会一直保留手写注释。
+
+### 支持的端点
+
+除 `/health` 外，所有端点都需要网关密钥，可任选一种方式传递：
+`Authorization: Bearer <key>`、`x-api-key: <key>` 或 `?key=<key>`。
+
+| 端点 | 说明 |
+|---|---|
+| `POST /v1/chat/completions` | 主端点：模型路由、provider/key fallback、SSE 流式 |
+| `POST /v1/completions` | 老式文本补全，会转成 chat 请求发给上游、再把结果转回老格式（含流式） |
+| `POST /v1/responses` | 原样转发到上游 `/responses`，需要上游本身支持 |
+| `POST /v1/embeddings` | 原样转发到上游 `/embeddings` |
+| `GET /v1/models` | 返回 `routes` 里配置的模型 |
+| `GET /v1/models/{id}` | 查询单个模型 |
+| `GET /health` | 免鉴权探活 |
+
+已启用 CORS（会正确响应预检请求），所以浏览器里的网页版客户端也能跨域调用。
+所有错误（包括 401 / 404 / 405）都是 OpenAI 风格的 JSON：
+`{"error":{"message":…,"type":…,"code":…,"param":…}}`。
+
+客户端的 base URL 填 `http://你的服务器:8787/v1`。除非软件明确要求填完整路径，
+不要自己再加 `/chat/completions`，否则请求会落到错误的 URL 上。
 
 ### 使用
 

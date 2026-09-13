@@ -19,6 +19,17 @@ type Adapter interface {
 	Do(ctx context.Context, baseURL, key string, req []byte, model string, isStream bool) (*http.Response, error)
 }
 
+// PathAdapter is implemented by adapters that can forward arbitrary upstream
+// paths instead of only chat completions. The gateway uses it for its
+// compatibility endpoints (/v1/embeddings, /v1/responses, legacy /v1/completions)
+// so a chat-only adapter such as the Anthropic one is skipped rather than sent a
+// request it cannot translate.
+type PathAdapter interface {
+	Adapter
+	// DoPath sends one upstream request to baseURL+path.
+	DoPath(ctx context.Context, baseURL, key, path string, req []byte, model string, isStream bool) (*http.Response, error)
+}
+
 // Registry maps type names to adapters.
 type Registry struct {
 	adapters map[string]Adapter
