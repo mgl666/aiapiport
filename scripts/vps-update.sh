@@ -15,9 +15,14 @@
 #
 set -euo pipefail
 
+# 本脚本名，用于错误提示（管道执行时 $0 是 bash）
+SELF_NAME="$(basename "${BASH_SOURCE[0]:-$0}")"
+case "$SELF_NAME" in bash|sh|"") SELF_NAME="vps-update.sh" ;; esac
+
 REPO="${REPO:-mgl666/aiapiport}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 SERVICE="${SERVICE:-aiapiport}"
+if [ -n "${CONFIG_FILE:-}" ]; then CONFIG_FILE_GIVEN=1; else CONFIG_FILE_GIVEN=0; fi
 CONFIG_FILE="${CONFIG_FILE:-/etc/aiapiport/config.yaml}"
 HEALTH_URL="${HEALTH_URL:-}"
 HEALTH_TRIES="${HEALTH_TRIES:-15}"
@@ -90,6 +95,56 @@ fi
 BIN_PATH="$INSTALL_DIR/$BIN_NAME"
 BACKUP_PATH="${BIN_PATH}.bak"
 
+# ---- 探测正在运行实例的启动参数 ----
+# 部署方式可能是 daemon 模式（aiapiport start -config X），配置路径只存在于正在运行
+# 的进程命令行里；也可能是 systemd，路径写在 unit 的 ExecStart 里。两种都能从
+# /proc/<pid>/cmdline 读到。必须在停服之前取到，否则重启时可能用一个不存在的默认
+# 路径，服务就再也起不来了。
+DETECTED_CONFIG=""
+DETECTED_PORT=""
+
+detect_running_args() {
+  [ -r /proc/self/cmdline ] || return 1
+  command -v pgrep >/dev/null 2>&1 || return 1
+
+  local pid cwd i arg first
+  for pid in $(pgrep -x "$BIN_NAME" 2>/dev/null) $(pgrep -f "$BIN_NAME serve" 2>/dev/null); do
+    [ "$pid" = "$$" ] && continue
+    [ -r "/proc/$pid/cmdline" ] || continue
+
+    local -a argv=()
+    while IFS= read -r arg; do argv+=("$arg"); done \
+      < <(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+
+    first="${argv[0]:-}"
+    case "$first" in *"$BIN_NAME"*) ;; *) continue ;; esac
+    [ "${argv[1]:-}" = "serve" ] || continue
+
+    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+    for ((i = 2; i < ${#argv[@]}; i++)); do
+      arg="${argv[$i]}"
+      case "$arg" in
+        -config=*)  DETECTED_CONFIG="${arg#-config=}" ;;
+        --config=*) DETECTED_CONFIG="${arg#--config=}" ;;
+        -config|--config)
+          if [ $((i + 1)) -lt ${#argv[@]} ]; then i=$((i + 1)); DETECTED_CONFIG="${argv[$i]}"; fi ;;
+        -port=*)  DETECTED_PORT="${arg#-port=}" ;;
+        --port=*) DETECTED_PORT="${arg#--port=}" ;;
+        -port|--port)
+          if [ $((i + 1)) -lt ${#argv[@]} ]; then i=$((i + 1)); DETECTED_PORT="${argv[$i]}"; fi ;;
+      esac
+    done
+
+    # 相对路径按原进程的工作目录解析
+    if [ -n "$DETECTED_CONFIG" ] && [ "${DETECTED_CONFIG#/}" = "$DETECTED_CONFIG" ] && [ -n "$cwd" ]; then
+      DETECTED_CONFIG="$cwd/$DETECTED_CONFIG"
+    fi
+    if [ -n "$DETECTED_CONFIG" ]; then return 0; fi
+    DETECTED_PORT=""
+  done
+  return 1
+}
+
 # ---- 探测平台 ----
 case "$(uname -s)" in
   Linux)
@@ -120,8 +175,25 @@ restart_service() {
   if [ "$USE_SYSTEMD" -eq 1 ]; then
     as_root systemctl restart "$SERVICE"
   else
+    local -a args=(-config "$CONFIG_FILE")
+    if [ -n "$DETECTED_PORT" ]; then args+=(-port "$DETECTED_PORT"); fi
     "$BIN_PATH" stop >/dev/null 2>&1 || true
-    "$BIN_PATH" start -config "$CONFIG_FILE"
+    "$BIN_PATH" start "${args[@]}"
+  fi
+}
+
+# show_service_logs 打印最近的日志，启动失败时用来直接看出原因。
+show_service_logs() {
+  echo "   最近日志："
+  if [ "$USE_SYSTEMD" -eq 1 ]; then
+    as_root journalctl -u "$SERVICE" -n 20 --no-pager 2>/dev/null | sed 's/^/     /' || true
+    return
+  fi
+  local lf="${AIAPIPORT_RUN_DIR:-$HOME/.aiapiport}/aiapiport.log"
+  if [ -f "$lf" ]; then
+    tail -n 20 "$lf" | sed 's/^/     /'
+  else
+    echo "     （未找到日志文件 $lf）"
   fi
 }
 
@@ -141,6 +213,28 @@ service_active() {
   fi
 }
 
+# ---- 确定配置文件 ----
+detect_running_args || true
+if [ -n "$DETECTED_CONFIG" ] && [ "$CONFIG_FILE_GIVEN" -eq 0 ] && [ -f "$DETECTED_CONFIG" ]; then
+  CONFIG_FILE="$DETECTED_CONFIG"
+  log "已从运行中的实例探测到配置文件：$CONFIG_FILE"
+fi
+if [ -n "$DETECTED_PORT" ]; then
+  log "已从运行中的实例探测到端口参数：$DETECTED_PORT"
+fi
+
+# 配置不存在就直接退出：把服务停了却起不来，比不更新更糟。
+if [ "$RESTART" -eq 1 ] && [ ! -f "$CONFIG_FILE" ]; then
+  err "配置文件不存在：$CONFIG_FILE"
+  echo "    请显式指定实际路径后重试："
+  echo "      sudo CONFIG_FILE=/path/to/config.yaml $SELF_NAME"
+  echo "      sudo CONFIG_FILE=/path/to/config.yaml $SELF_NAME --no-restart   # 只替换二进制"
+  exit 1
+fi
+if [ "$RESTART" -eq 1 ]; then
+  log "将使用配置：$CONFIG_FILE"
+fi
+
 # ---- 解析版本 ----
 current_version() {
   [ -x "$1" ] || { echo ""; return; }
@@ -158,9 +252,12 @@ if [ -n "$TARGET_VERSION" ]; then
   target="${TARGET_VERSION#v}"
 else
   log "查询最新 release..."
-  target="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  # 先把 JSON 收进变量再解析，避免 grep 提前退出导致 curl 报
+  # "curl: (23) Failure writing output to destination"
+  release_json="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" || true)"
+  target="$(printf '%s\n' "$release_json" \
     | grep -m1 '"tag_name"' \
-    | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')" || true
+    | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/' || true)"
   [ -n "$target" ] || { err "无法获取最新版本（网络或仓库问题），可用 -v 指定版本"; exit 1; }
 fi
 
@@ -205,9 +302,11 @@ rollback() {
       warn "已回滚并恢复运行，当前版本 v$(current_version "$BIN_PATH")"
     else
       err "回滚后服务仍未运行，请手动排查"
+      show_service_logs
     fi
   else
     err "没有可用备份，请手动排查"
+    show_service_logs
   fi
   exit 1
 }
@@ -227,11 +326,14 @@ if [ "$RESTART" -eq 0 ]; then
 fi
 
 # ---- 重启并验证 ----
+if [ "$USE_SYSTEMD" -eq 0 ]; then
+  log "启动命令：$BIN_PATH start -config $CONFIG_FILE${DETECTED_PORT:+ -port $DETECTED_PORT}"
+fi
 log "启动服务"
 restart_service
 
 sleep 1
-service_active || rollback "服务启动失败（systemd 或 pid 状态异常）"
+service_active || rollback "服务启动失败（进程未运行）"
 ok "服务已启动"
 
 if [ "$HEALTH_CHECK" -eq 0 ]; then
