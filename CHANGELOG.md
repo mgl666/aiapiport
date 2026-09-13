@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.4] - 2026-09-13
+
+### Added
+
+- **CORS 支持**：所有端点都会返回 `Access-Control-Allow-*` 响应头，并正确处理
+  `OPTIONS` 预检请求。此前预检返回 405 且没有任何 CORS 头，浏览器里的网页版客户端
+  （NextChat 网页版、LobeChat、Open WebUI 等）跨域调用会被浏览器直接拦截，而桌面
+  客户端不受影响——这正是"有些软件能用、有些软件用不了"的主因。
+- **新增 `POST /v1/completions`**：老式文本补全接口。请求会先转换成 chat 请求发给
+  上游，返回结果再转换回 `text_completion` 格式（含流式逐块转换、`usage` 和
+  `finish_reason`），因此只支持 chat 的上游（DeepSeek、各类中转站）也能服务老客户端。
+- **新增 `POST /v1/responses`、`POST /v1/embeddings`**：按 model → provider 路由原样
+  转发到上游同名路径，复用现有的 key / provider fallback。
+- **新增 `GET /v1/models/{id}`**：单模型查询（`/v1/models/` 带斜杠按列表处理）。
+- **鉴权方式放宽**：除 `Authorization: Bearer <key>` 外，现在也接受
+  `Authorization: <key>`、`x-api-key`、`api-key` 和 `?key=` / `?api_key=` 查询参数。
+- **新增 `scripts/vps-update.sh`**：VPS 手动更新脚本，从 GitHub Release 下载对应平台
+  二进制，备份旧版本、原子替换、重启服务并做健康检查，启动或检查失败时自动回滚。
+- **新增 `scripts/commit-and-push.sh`**：提交前自动执行 gofmt / `go vet` / 构建检查，
+  并拦截 `config.yaml`、`.env`、`*.pem` 等含密钥的文件。
+
+### Changed
+
+- **错误响应统一为 OpenAI 风格 JSON**：401 / 404 / 405 等不再返回纯文本
+  （`unauthorized`、Go 默认的 `404 page not found`），改为
+  `{"error":{"message":…,"type":…,"code":…,"param":…}}`，并附带可用端点、可用模型名等
+  提示，避免客户端只显示"未知错误"。
+- 请求的 model 不在 `routes` 中时，错误信息会提示可用 `GET /v1/models` 查看可用模型名。
+- 与上游类型不匹配的接口（例如 Claude 直连 provider 上的 `/embeddings`）会被跳过并
+  返回 501 `endpoint_not_supported`，不再浪费一次 key 尝试。
+
+### Fixed
+
+- 修正 `daemon_unix.go` 的 gofmt 格式问题。
+
 ## [v0.1.3] - 2026-08-16
 
 ### Added
@@ -48,7 +83,8 @@ All notable changes to this project will be documented in this file.
 - **健康检查**：`GET /health` 端点用于监控探活。
 - **模型列表**：`GET /v1/models` 返回 OpenAI 格式的模型列表。
 
-[Unreleased]: https://github.com/mgl666/aiapiport/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/mgl666/aiapiport/compare/v0.1.4...HEAD
+[v0.1.4]: https://github.com/mgl666/aiapiport/compare/v0.1.3...v0.1.4
 [v0.1.3]: https://github.com/mgl666/aiapiport/compare/v0.1.2...v0.1.3
 [v0.1.2]: https://github.com/mgl666/aiapiport/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/mgl666/aiapiport/compare/v0.1.0...v0.1.1
