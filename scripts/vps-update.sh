@@ -102,13 +102,19 @@ BACKUP_PATH="${BIN_PATH}.bak"
 # 路径，服务就再也起不来了。
 DETECTED_CONFIG=""
 DETECTED_PORT=""
+CANDIDATE_CONFIGS=()
+
+running_pids() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+  { pgrep -x "$BIN_NAME" 2>/dev/null; pgrep -f "$BIN_NAME serve" 2>/dev/null; } | sort -u
+}
 
 detect_running_args() {
   [ -r /proc/self/cmdline ] || return 1
   command -v pgrep >/dev/null 2>&1 || return 1
 
   local pid cwd i arg first
-  for pid in $(pgrep -x "$BIN_NAME" 2>/dev/null) $(pgrep -f "$BIN_NAME serve" 2>/dev/null); do
+  for pid in $(running_pids); do
     [ "$pid" = "$$" ] && continue
     [ -r "/proc/$pid/cmdline" ] || continue
 
@@ -142,6 +148,49 @@ detect_running_args() {
     if [ -n "$DETECTED_CONFIG" ]; then return 0; fi
     DETECTED_PORT=""
   done
+  return 1
+}
+
+# ---- 按常见位置搜索配置文件 ----
+# 服务没在运行时上面那条路读不到任何东西（上一次更新失败后就是这个状态），
+# 这时按常见位置找一遍，避免用户被卡在"必须手动指定配置"上。
+# 找到唯一一个候选才采用；有多个候选就报错让用户明确指定，避免启错配置。
+CONFIG_SEARCH_PATHS=""
+looks_like_config() {
+  [ -f "$1" ] || return 1
+  grep -qE '^[[:space:]]*(auth_key|providers|routes):' "$1" 2>/dev/null
+}
+
+search_config_file() {
+  local cand real
+  local -a found=() seen=()
+  CONFIG_SEARCH_PATHS=""
+
+  for cand in \
+    "$PWD/config.yaml" \
+    "$HOME/Project/aiapiport/config.yaml" \
+    "/root/Project/aiapiport/config.yaml" \
+    "$HOME/aiapiport/config.yaml" \
+    "/etc/aiapiport/config.yaml" \
+    "/opt/aiapiport/config.yaml" \
+    "/usr/local/etc/aiapiport/config.yaml"
+  do
+    CONFIG_SEARCH_PATHS="${CONFIG_SEARCH_PATHS}${CONFIG_SEARCH_PATHS:+、}${cand}"
+    looks_like_config "$cand" || continue
+    real="$(readlink -f "$cand" 2>/dev/null || printf '%s' "$cand")"
+    case " ${seen[*]:-} " in *" $real "*) continue ;; esac
+    seen+=("$real")
+    found+=("$real")
+  done
+
+  if [ "${#found[@]}" -eq 1 ]; then
+    DETECTED_CONFIG="${found[0]}"
+    return 0
+  fi
+  if [ "${#found[@]}" -gt 1 ]; then
+    CANDIDATE_CONFIGS=("${found[@]}")
+    return 2
+  fi
   return 1
 }
 
@@ -215,9 +264,25 @@ service_active() {
 
 # ---- 确定配置文件 ----
 detect_running_args || true
-if [ -n "$DETECTED_CONFIG" ] && [ "$CONFIG_FILE_GIVEN" -eq 0 ] && [ -f "$DETECTED_CONFIG" ]; then
-  CONFIG_FILE="$DETECTED_CONFIG"
-  log "已从运行中的实例探测到配置文件：$CONFIG_FILE"
+if [ "$CONFIG_FILE_GIVEN" -eq 0 ]; then
+  if [ -n "$DETECTED_CONFIG" ] && [ -f "$DETECTED_CONFIG" ]; then
+    CONFIG_FILE="$DETECTED_CONFIG"
+    log "已从运行中的实例探测到配置文件：$CONFIG_FILE"
+  else
+    search_status=0
+    search_config_file || search_status=$?
+    if [ "$search_status" -eq 0 ]; then
+      CONFIG_FILE="$DETECTED_CONFIG"
+      warn "没有正在运行的实例，已按常见位置找到配置文件：$CONFIG_FILE"
+      echo "    如果不是这个文件，加上 CONFIG_FILE=/path/to/config.yaml 再跑一次"
+    elif [ "$search_status" -eq 2 ]; then
+      err "找到多个候选配置文件，请显式指定用哪一个："
+      for c in "${CANDIDATE_CONFIGS[@]}"; do
+        echo "      sudo CONFIG_FILE=$c $SELF_NAME"
+      done
+      exit 1
+    fi
+  fi
 fi
 if [ -n "$DETECTED_PORT" ]; then
   log "已从运行中的实例探测到端口参数：$DETECTED_PORT"
@@ -226,6 +291,10 @@ fi
 # 配置不存在就直接退出：把服务停了却起不来，比不更新更糟。
 if [ "$RESTART" -eq 1 ] && [ ! -f "$CONFIG_FILE" ]; then
   err "配置文件不存在：$CONFIG_FILE"
+  if [ -z "$(running_pids)" ]; then
+    echo "    当前没有 aiapiport 进程在运行，无法从它的命令行里读出原来的配置路径。"
+  fi
+  echo "    已查找过：${CONFIG_SEARCH_PATHS:-（未搜索）}"
   echo "    请显式指定实际路径后重试："
   echo "      sudo CONFIG_FILE=/path/to/config.yaml $SELF_NAME"
   echo "      sudo CONFIG_FILE=/path/to/config.yaml $SELF_NAME --no-restart   # 只替换二进制"
